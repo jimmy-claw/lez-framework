@@ -98,7 +98,13 @@ pub fn generate_ffi(idl: &LezIdl) -> Result<String, String> {
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
 
-    // parse_account_id helper
+    // parse_program_id helper (alias, used for ProgramId-typed args)
+    writeln!(out, "fn parse_program_id(s: &str) -> Result<ProgramId, String> {{").unwrap();
+    writeln!(out, "    parse_program_id_hex(s)").unwrap();
+    writeln!(out, "}}").unwrap();
+    writeln!(out).unwrap();
+
+// parse_account_id helper
     writeln!(out, "fn parse_account_id(s: &str) -> Result<AccountId, String> {{").unwrap();
     writeln!(out, "    if let Ok(id) = s.parse() {{ return Ok(id); }}").unwrap();
     writeln!(out, "    let s = s.trim_start_matches(\"0x\");").unwrap();
