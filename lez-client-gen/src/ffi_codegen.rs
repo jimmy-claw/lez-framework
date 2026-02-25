@@ -87,7 +87,8 @@ pub fn generate_ffi(idl: &LezIdl) -> Result<String, String> {
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
     writeln!(out, "fn error_json(msg: &str) -> *mut c_char {{").unwrap();
-    writeln!(out, "    let body = format!(\"{{{{\\\"success\\\":false,\\\"error\\\":{{}}}}}\", serde_json::json!(msg));").unwrap();
+    writeln!(out, "    let v = serde_json::json!(msg).to_string();").unwrap();
+    writeln!(out, "    let body = format!(\"{{{{\\\"success\\\":false,\\\"error\\\":{{}}}}}}\", v);").unwrap();
     writeln!(out, "    to_cstring(body)").unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
