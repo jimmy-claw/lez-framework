@@ -22,7 +22,10 @@ use cli::{print_help, parse_instruction_args, snake_to_kebab};
 use init::init_project;
 use inspect::inspect_binaries;
 use tx::execute_instruction;
-use lez_framework_core::idl::LezIdl;
+use pda::compute_pda_from_seeds;
+use lez_framework_core::idl::{LezIdl, IdlSeed};
+use parse::{parse_value, ParsedValue};
+use nssa::AccountId;
 use std::collections::HashMap;
 use std::{env, fs, process};
 
@@ -93,6 +96,7 @@ pub async fn run() {
         eprintln!("  init <name>              Scaffold a new LEZ project");
         eprintln!("  inspect <FILE> [FILE...]  Print ProgramId for ELF binary(ies)");
         eprintln!();
+        eprintln!("  pda <ACCOUNT> [--seed-arg VALUE...]  Compute a PDA defined in the IDL");
         eprintln!("For all other commands, provide an IDL JSON file.");
         process::exit(1);
     }
@@ -125,6 +129,9 @@ pub async fn run() {
         Some("inspect") => {
             inspect_binaries(&remaining_args[2..]);
         }
+        Some("pda") => {
+            compute_pda_command(&idl, &program_path, &remaining_args[2..]);
+        }
         Some(cmd) => {
             let instruction = idl.instructions.iter().find(|ix| {
                 snake_to_kebab(&ix.name) == cmd || ix.name == cmd
@@ -143,6 +150,112 @@ pub async fn run() {
                     process::exit(1);
                 }
             }
+        }
+    }
+}
+
+/// Compute and print a PDA from the IDL definition.
+///
+/// Usage: <binary> --idl <IDL> pda <account-name> [--<seed-arg> <value> ...]
+///
+/// Looks up the named account across all instructions, finds its PDA seeds,
+/// resolves them using provided args, and prints the base58 AccountId.
+fn compute_pda_command(idl: &LezIdl, program_path: &str, args: &[String]) {
+    let account_name = match args.first() {
+        Some(n) => n.as_str(),
+        None => {
+            eprintln!("Usage: pda <account-name> [--<seed-arg> <value> ...]");
+            eprintln!();
+            eprintln!("Available PDA accounts:");
+            for ix in &idl.instructions {
+                for acc in &ix.accounts {
+                    if acc.pda.is_some() {
+                        eprintln!("  {} (in instruction: {})", acc.name, ix.name);
+                    }
+                }
+            }
+            std::process::exit(1);
+        }
+    };
+
+    // Find account definition with PDA seeds
+    let pda_def = idl.instructions.iter()
+        .flat_map(|ix| &ix.accounts)
+        .find(|acc| acc.name == account_name || snake_to_kebab(&acc.name) == account_name)
+        .and_then(|acc| acc.pda.as_ref());
+
+    let pda_def = match pda_def {
+        Some(p) => p,
+        None => {
+            eprintln!("❌ No PDA account named '{}' found in IDL", account_name);
+            eprintln!("   Available PDAs:");
+            for ix in &idl.instructions {
+                for acc in &ix.accounts {
+                    if acc.pda.is_some() {
+                        eprintln!("     {} ({})", acc.name, ix.name);
+                    }
+                }
+            }
+            std::process::exit(1);
+        }
+    };
+
+    // Parse --key value pairs from remaining args
+    let mut seed_args: HashMap<String, ParsedValue> = HashMap::new();
+    let mut i = 1;
+    while i < args.len() {
+        if let Some(key) = args[i].strip_prefix("--") {
+            if i + 1 < args.len() {
+                let raw = &args[i + 1];
+                // Try to parse as string (covers bytes32, u64, etc via parse_value)
+                // Use Raw as fallback — seed resolution handles Str type
+                seed_args.insert(
+                    key.replace('-', "_").to_string(),
+                    ParsedValue::Str(raw.clone()),
+                );
+                i += 2;
+            } else {
+                eprintln!("❌ Missing value for --{}", key);
+                std::process::exit(1);
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    // Load program to get program_id
+    let program_bytes = match std::fs::read(program_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("❌ Cannot read program binary '{}': {}", program_path, e);
+            eprintln!("   Hint: pass --program <path-to-binary>");
+            std::process::exit(1);
+        }
+    };
+    use nssa::program::Program;
+    let program = Program::new(program_bytes).unwrap_or_else(|e| {
+        eprintln!("❌ Invalid program binary: {:?}", e);
+        std::process::exit(1);
+    });
+    let program_id = program.id();
+
+    // Compute PDA
+    match compute_pda_from_seeds(&pda_def.seeds, &program_id, &HashMap::new(), &seed_args) {
+        Ok(account_id) => {
+            println!("{}", account_id);
+        }
+        Err(e) => {
+            eprintln!("❌ Failed to compute PDA: {}", e);
+            eprintln!();
+            eprintln!("Seeds for '{}':", account_name);
+            for seed in &pda_def.seeds {
+                match seed {
+                    IdlSeed::Const { value } => eprintln!("  const: {:?}", value),
+                    IdlSeed::Arg { path } => eprintln!("  arg: --{}", path.replace('_', "-")),
+                    IdlSeed::Account { path } => eprintln!("  account: {}", path),
+                }
+            }
+            std::process::exit(1);
         }
     }
 }
