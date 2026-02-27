@@ -80,6 +80,7 @@ pub async fn execute_instruction(
     let mut parsed_accounts: Vec<(&str, Vec<u8>)> = Vec::new();
     for acc in &ix.accounts {
         if acc.pda.is_some() { continue; }
+        if acc.rest { let key = format!("{}-account", snake_to_kebab(&acc.name)); if !args.contains_key(&key) { continue; } }
         let key = format!("{}-account", snake_to_kebab(&acc.name));
         let raw = args.get(&key).unwrap();
         match decode_bytes_32(raw) {
